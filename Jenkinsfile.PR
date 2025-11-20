@@ -1,0 +1,86 @@
+pipeline {
+    agent any
+    options { timestamps() }
+    
+    environment {
+        IMAGE_NAME = 'booking-app'
+    }
+    
+    stages {
+        stage('Checkout Git') {
+            steps {
+                checkout scm
+                echo " Repository cloned successfully"
+            }
+        }
+        
+        stage('Setup Environment') {
+            steps {
+                bat 'docker --version'
+                bat 'node --version'
+                echo "Environment setup completed"
+            }
+        }
+        
+        stage('Build Docker Image') {
+            steps {
+                bat "docker build -t ${IMAGE_NAME}:pr-${env.BUILD_NUMBER} ."
+                echo " Docker image built: ${IMAGE_NAME}:pr-${env.BUILD_NUMBER}"
+            }
+        }
+        
+        stage('Run Container for Testing') {
+            steps {
+                bat "docker run -d --name test-${env.BUILD_NUMBER} -p 8081:80 ${IMAGE_NAME}:pr-${env.BUILD_NUMBER}"
+                echo "Container started on port 8081"
+            }
+        }
+        
+        stage('Smoke Test') {
+            steps {
+                script {
+                    sleep 5  // Wait for container to start
+                    try {
+                        bat 'curl -s -o /dev/null -w "%{http_code}" http://localhost:8081 | find "200"'
+                        echo " Smoke test PASSED - Application is responding"
+                        bat 'echo "Smoke Test: PASSED" > test-results.txt'
+                    } catch (Exception e) {
+                        echo " Smoke test FAILED - Application not responding"
+                        bat 'echo "Smoke Test: FAILED" > test-results.txt'
+                        currentBuild.result = 'FAILURE'
+                        error("Smoke test failed")
+                    }
+                }
+            }
+        }
+        
+        stage('Archive Test Results') {
+            steps {
+                archiveArtifacts artifacts: 'test-results.txt', fingerprint: true
+                echo "Test results archived"
+            }
+        }
+        
+        stage('Cleanup') {
+            steps {
+                bat "docker stop test-${env.BUILD_NUMBER} || echo Container already stopped"
+                bat "docker rm test-${env.BUILD_NUMBER} || echo Container already removed"
+                echo " Cleanup completed"
+            }
+        }
+    }
+    
+    post {
+        always {
+            echo "🚀 Pipeline PR execution completed - Build ${env.BUILD_NUMBER}"
+        }
+        success {
+            echo "🎉 PR Pipeline SUCCESS - Ready for merge!"
+            bat 'echo "BUILD STATUS: SUCCESS" >> test-results.txt'
+        }
+        failure {
+            echo "PR Pipeline FAILED - Check the code!"
+            bat 'echo "BUILD STATUS: FAILED" >> test-results.txt'
+        }
+    }
+}
