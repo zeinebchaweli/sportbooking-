@@ -1,1 +1,63 @@
-[paste le code corrigé ci-dessus]
+pipeline {
+    agent any
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                bat 'echo Checkout PR done && dir'
+            }
+        }
+        
+        stage('Build Docker') {
+            steps {
+                bat '''
+                    echo Building Docker for PR...
+                    docker build -t booking-app:pr-%BUILD_NUMBER% .
+                    echo ✅ PR Docker built
+                '''
+            }
+        }
+        
+        stage('Test') {
+            steps {
+                bat '''
+                    echo Testing PR build...
+                    docker run -d --name pr-test-%BUILD_NUMBER% -p 8082:80 booking-app:pr-%BUILD_NUMBER%
+                    ping 127.0.0.1 -n 11 > nul
+                    
+                    curl -f http://localhost:8082
+                    if errorlevel 1 (
+                        echo ❌ PR TEST FAILED
+                        exit /b 1
+                    )
+                    
+                    echo ✅ PR TEST PASSED
+                    
+                    docker stop pr-test-%BUILD_NUMBER%
+                    docker rm pr-test-%BUILD_NUMBER%
+                '''
+            }
+        }
+        
+        stage('Archive') {
+            steps {
+                bat '''
+                    mkdir artifacts 2>nul
+                    echo "PR Build %BUILD_NUMBER% - PASSED" > artifacts\\result.txt
+                    echo "Date: %DATE% %TIME%" >> artifacts\\result.txt
+                '''
+                archiveArtifacts artifacts: 'artifacts/**/*'
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo '✅ PR PIPELINE SUCCESS - Ready for merge!'
+        }
+        failure {
+            echo '❌ PR PIPELINE FAILED'
+        }
+    }
+}
